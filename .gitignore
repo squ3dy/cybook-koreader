@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# Public repository: project files only.
+#
+# Ignore everything at the root, then explicitly allow the project tree.
+# This prevents books, device files, backups, logs, settings and release
+# artifacts from being committed by accident.
+# ---------------------------------------------------------------------------
+/*
+
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/CREDITS.md
+!/SOURCE.md
+!/CHANGELOG.md
+!/Makefile
+!/VERSION
+
+!/.github/
+!/docs/
+!/installer/
+!/plugin/
+!/recovery/
+!/scripts/
+
+# Allow the contents of the project directories.
+!/.github/**
+!/docs/**
+!/installer/**
+!/plugin/**
+!/recovery/**
+!/scripts/**
+
+# ---------------------------------------------------------------------------
+# Never publish user content, books, device data or build/release output.
+# ---------------------------------------------------------------------------
+*.txt
+*.epub
+*.pdf
+*.fb2
+*.mobi
+*.azw3
+*.djvu
+*.cbz
+*.cbr
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.log
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+*.sdr
+*.sdr/
+*.dict
+*.idx
+*.ifo
+*.bak
+*.old
+*.swp
+*~
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.token
+secrets*
+
+# macOS / device filesystem junk
+.DS_Store
+._*
+__MACOSX/
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+
+# Internal maintainer notes (kept outside the public repo)
+PUBLISHING.md
+
+# Local build/cache/release output
+dist/
+.build/
+backup/
+backups/
+
+# Device content and installed KOReader
+Книжки/
+Digital Editions/
+Dictionaries/
+Fonts/
+Pictures/
+system/
+koreader/
+adb_debug
+/cybook_upgrade
+perf-report.txt

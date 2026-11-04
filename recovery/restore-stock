@@ -1,0 +1,41 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Emergency: restore the stock reader and remove the KOReader shim.
+#
+# Copy this file to the ROOT of a FAT32 microSD card and rename it to:
+#     cybook_upgrade
+# Insert the card and boot the reader. The hook restores the stock reader and
+# reboots. Remove the card afterwards.
+#
+# This refuses to run if /mnt/app/boordr.stock is missing.
+
+LOG=/mnt/sd/cybook-upgrade-recovery.log
+if ! touch "$LOG" 2>/dev/null; then
+    LOG=/tmp/cybook-upgrade-recovery.log
+fi
+
+{
+    echo "=== $(date) restore-stock ==="
+
+    if ! mount -o remount,rw / >/dev/null 2>&1; then
+        echo "ERROR: could not remount / read-write"
+        exit 1
+    fi
+
+    if [ ! -e /mnt/app/boordr.stock ]; then
+        echo "ERROR: /mnt/app/boordr.stock is missing; refusing to touch the reader"
+        mount -o remount,ro / >/dev/null 2>&1
+        exit 1
+    fi
+
+    mv -f /mnt/app/boordr.stock /mnt/app/boordr
+    sync
+    mount -o remount,ro / >/dev/null 2>&1
+    echo "stock reader restored"
+    mv /mnt/sd/cybook_upgrade /mnt/sd/cybook_upgrade.done 2>/dev/null || true
+    echo "rebooting"
+} >>"$LOG" 2>&1
+
+sync
+/bin/busybox reboot

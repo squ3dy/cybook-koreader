@@ -1,0 +1,241 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Bookeen/Cybook KOReader drop-in installer.
+#
+# Derived from KOReader's platform/bookeen/cybook_upgrade, with the mode-switch
+# and crash-safety ideas from bruthethe/saraiva-lev-koreader adapted for CYBOY5F.
+# Runs from the FAT user partition. Keeps the stock reader as boordr.stock.
+#
+# The Bookeen supervisor executes a file named "cybook_upgrade" from the FAT or
+# SD root once at boot, then removes it. Running this file manually over ADB is
+# also supported; remove it from the FAT root afterwards.
+
+set -u
+
+KO_DIR="/mnt/fat/koreader"
+STOCK="/mnt/app/boordr"
+STOCK_SAVED="/mnt/app/boordr.stock"
+SHIM="/mnt/app/boordr"
+SHIM_NEW="/mnt/app/boordr.new"
+LOG="/mnt/fat/koreader-install.log"
+
+log() {
+    echo "[$(date)] $*" >>"${LOG}" 2>&1
+}
+
+splash() {
+    [ -x /bin/eink ] && [ -e "$1" ] && /bin/eink d "$1" >/dev/null 2>&1
+}
+
+if ! grep -q ' /mnt/fat ' /proc/mounts 2>/dev/null; then
+    if mount /mnt/fat >/dev/null 2>&1 || mount /dev/fat /mnt/fat >/dev/null 2>&1; then
+        trap 'sync; umount /mnt/fat >/dev/null 2>&1' EXIT
+    fi
+fi
+
+log "cybook_upgrade: starting (KOReader drop-in installer, cyevd-aware)"
+log "  kernel:  $(uname -r)"
+log "  version: $(cat /etc/version 2>/dev/null)"
+log "  rootfs:  $(grep ' / ' /proc/mounts 2>/dev/null | head -1)"
+
+if [ ! -x "${KO_DIR}/koreader.sh" ]; then
+    log "!! ${KO_DIR}/koreader.sh not found or not executable -- nothing installed."
+    log "   Extract the KOReader bookeen zip into the FAT root first."
+    splash /system/update_finished_error.bmp
+    exit 0
+fi
+
+if [ ! -e "${STOCK_SAVED}" ] && [ "$(head -c 2 "${STOCK}" 2>/dev/null)" = "#!" ]; then
+    log "!! ${STOCK} is already a script and ${STOCK_SAVED} is missing."
+    log "   Refusing to overwrite the only reader with another shim."
+    splash /system/update_finished_error.bmp
+    exit 0
+fi
+
+splash /system/factory_processing.bmp
+
+mount -o remount,rw / >/dev/null 2>&1 || {
+    log "!! could not remount / rw -- nothing installed."
+    splash /system/update_finished_error.bmp
+    exit 0
+}
+
+cat >"${SHIM_NEW}" <<'SHIM_EOF'
+#!/bin/sh
+# Cybook reader shim: KOReader when enabled, stock reader otherwise.
+# Modes requested by the KOReader plugin (cybook.koplugin) via /tmp/cybook-mode:
+#   usb   = close KOReader, export /dev/fat as mass storage, return on unplug
+#   adb   = close KOReader, start adbd, return on unplug
+#   stock = close KOReader and start the stock reader (creates .disabled)
+
+KO=/mnt/fat/koreader
+STOCK=/mnt/app/boordr.stock
+MODE=/tmp/cybook-mode
+
+mount_fat() {
+    grep -q ' /mnt/fat ' /proc/mounts 2>/dev/null || mount /mnt/fat >/dev/null 2>&1
+}
+
+cable() {
+    [ "$(cat /sys/class/power_supply/usb/online 2>/dev/null)" = 1 ]
+}
+
+log_mode() {
+    echo "[$(date)] $*" >>"${KO}/mode.log" 2>/dev/null
+}
+
+start_cyevd() {
+    if ! pidof cyevd >/dev/null 2>&1; then
+        /etc/init.d/S11cyevd.sh start >/dev/null 2>&1
+    fi
+}
+
+external_mode() {
+    mode=$1
+    cd / || return 1
+    sync
+
+    if [ "${mode}" = "usb" ]; then
+        # Never export /dev/fat while it is mounted: the PC and the device
+        # writing at the same time can corrupt the FAT filesystem.
+        umount /mnt/fat >/dev/null 2>&1 || { sleep 2; umount /mnt/fat >/dev/null 2>&1; } || {
+            log_mode "usb mode: /mnt/fat is busy"
+            return 1
+        }
+        /etc/init.d/mass_storage.sh start || {
+            log_mode "usb mode: mass_storage start failed"
+            return 1
+        }
+    else
+        /etc/init.d/adb.sh start || {
+            log_mode "adb mode: adb start failed"
+            return 1
+        }
+    fi
+
+    # Wait up to 5 minutes for the cable, then until it is unplugged.
+    t=0
+    while ! cable; do
+        sleep 1
+        t=$((t + 1))
+        [ "${t}" -ge 300 ] && break
+    done
+    while cable; do sleep 2; done
+
+    if [ "${mode}" = "usb" ]; then
+        /etc/init.d/mass_storage.sh stop
+    else
+        /etc/init.d/adb.sh stop
+    fi
+    sync
+    return 0
+}
+
+mount_fat
+
+while :; do
+    if [ -x "${KO}/koreader.sh" ] && [ ! -e "${KO}/.disabled" ]; then
+        rm -f "${MODE}"
+
+        # cyevd exclusively grabs event0/1/2; KOReader needs them directly.
+        killall cyevd >/dev/null 2>&1
+        sleep 1
+
+        cd "${KO}" || exec "${STOCK}" "$@"
+        KO_VIA_BOORDR_SHIM=1
+        export KO_VIA_BOORDR_SHIM
+
+        T0=$(cut -d. -f1 /proc/uptime)
+        ./koreader.sh
+        rc=$?
+        T1=$(cut -d. -f1 /proc/uptime)
+        cd /
+
+        m=$(cat "${MODE}" 2>/dev/null)
+        case "${m}" in
+            usb|adb)
+                rm -f "${MODE}"
+                if external_mode "${m}"; then
+                    mount_fat
+                    log_mode "${m} mode finished"
+                else
+                    mount_fat
+                    log_mode "${m} mode failed"
+                fi
+                continue
+                ;;
+            stock)
+                rm -f "${MODE}" "${KO}/.fails"
+                mount_fat
+                : >"${KO}/.disabled"
+                sync
+                start_cyevd
+                exec "${STOCK}" "$@"
+                ;;
+        esac
+
+        # Safety switch: two failures in a row, each shorter than 120 s,
+        # disable KOReader automatically and fall back to the stock reader.
+        if [ "${rc}" -ne 0 ] && [ $((T1 - T0)) -lt 120 ]; then
+            n=$(cat "${KO}/.fails" 2>/dev/null)
+            n=$(( ${n:-0} + 1 ))
+            echo "${n}" >"${KO}/.fails"
+            if [ "${n}" -ge 2 ]; then
+                : >"${KO}/.disabled"
+                rm -f "${KO}/.fails"
+                log_mode "KOReader failed twice quickly; disabled"
+            fi
+            sync
+        else
+            rm -f "${KO}/.fails"
+        fi
+
+        # ebrmain understands 101 = power off, 11 = relaunch.
+        [ "${rc}" -eq 0 ] && exit 101
+        exit 11
+    fi
+
+    start_cyevd
+    exec "${STOCK}" "$@"
+done
+SHIM_EOF
+
+chmod 755 "${SHIM_NEW}"
+
+if [ -e "${STOCK_SAVED}" ]; then
+    log "  ${STOCK_SAVED} already present -- refreshing the shim only."
+else
+    # Hard link, so the original reader is preserved without using extra space.
+    ln "${STOCK}" "${STOCK_SAVED}" || {
+        log "!! could not hard-link ${STOCK} to ${STOCK_SAVED} -- nothing installed."
+        rm -f "${SHIM_NEW}"
+        mount -o remount,ro / >/dev/null 2>&1
+        splash /system/update_finished_error.bmp
+        exit 0
+    }
+    log "  hard-linked stock reader to ${STOCK_SAVED}"
+fi
+
+# Atomic rename: the original path is never missing, even if power fails.
+mv "${SHIM_NEW}" "${SHIM}" || {
+    log "!! could not install ${SHIM} -- original reader is untouched."
+    rm -f "${SHIM_NEW}"
+    mount -o remount,ro / >/dev/null 2>&1
+    splash /system/update_finished_error.bmp
+    exit 0
+}
+
+rm -f "${KO_DIR}/.fails"
+sync
+mount -o remount,ro / >/dev/null 2>&1
+
+log "  installed shim at ${SHIM}"
+log "cybook_upgrade: done."
+log ""
+log "To undo: delete ${SHIM} and move ${STOCK_SAVED} back to ${STOCK}"
+log "  (mount -o remount,rw / first), or create ${KO_DIR}/.disabled."
+
+splash /system/update_finished_good.bmp
+
+exit 0

@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Emergency: boot the stock reader on the next boot.
+#
+# Copy this file to the ROOT of a FAT32 microSD card and rename it to:
+#     cybook_upgrade
+# Insert the card and boot the reader. The Bookeen supervisor runs it as root,
+# then reboots. Remove the card afterwards.
+
+LOG=/mnt/sd/cybook-upgrade-recovery.log
+if ! touch "$LOG" 2>/dev/null; then
+    LOG=/tmp/cybook-upgrade-recovery.log
+fi
+
+{
+    echo "=== $(date) disable-koreader ==="
+    grep -q ' /mnt/fat ' /proc/mounts 2>/dev/null || mount /mnt/fat >/dev/null 2>&1
+    mkdir -p /mnt/fat/koreader
+    touch /mnt/fat/koreader/.disabled
+    sync
+    echo "created /mnt/fat/koreader/.disabled"
+    # Prevent a second run if the firmware did not consume the hook.
+    mv /mnt/sd/cybook_upgrade /mnt/sd/cybook_upgrade.done 2>/dev/null || true
+    echo "rebooting"
+} >>"$LOG" 2>&1
+
+sync
+/bin/busybox reboot

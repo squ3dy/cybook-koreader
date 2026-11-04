@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+*.sh text eol=lf
+installer/cybook_upgrade text eol=lf
+recovery/disable-koreader text eol=lf
+recovery/restore-stock text eol=lf
