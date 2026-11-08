@@ -20,6 +20,9 @@ Back up your books before starting; recovery is possible but not guaranteed.
 - Restarts `cyevd` when falling back to the stock reader.
 - Adds a KOReader menu for USB mass storage, ADB, returning to stock, and performance
   tuning.
+- Adds a reader Home-button Quick Menu with a 10-step frontlight slider, TOC, night
+  mode, rotation, full refresh, dictionary and file browser.
+- Uses Home as a Back button, one level at a time, in menus and dialogs.
 - Falls back to stock automatically after two quick KOReader crashes.
 - Keeps the original reader at `/mnt/app/boordr.stock`.
 
@@ -46,6 +49,25 @@ The installer writes `/mnt/fat/koreader-install.log`. If KOReader does not start
 the stock reader and read that log over USB.
 
 ## Daily use
+
+**Home Quick Menu** — while reading, the Home button opens:
+
+```
+Frontlight        Night mode
+Table of contents Rotate
+Full refresh      Dictionary
+File browser      (full-width row)
+```
+
+The frontlight dialog has a slider snapped to levels 1–10, **Min** (native hardware
+minimum), **Off/On**, **Max**, and `−`/`+`. The side page-turn buttons also lower and
+raise brightness while it is open. The setting is under
+**Tools → Cybook: Home button**.
+
+**Home as Back** — when a menu or dialog is open, Home backs out one level at a time.
+This works for settings, TOC, dictionary/input dialogs, confirmations and file-manager
+menus. The Quick Menu does not open while backing out. With no menu open, Home still
+opens the Quick Menu in the reader and goes to the home folder in the file manager.
 
 **USB mode** — copy books without rebooting:
 

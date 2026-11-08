@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.0 — 2026-11-08
+
+- New reader **Home-button Quick Menu** with seven actions: Frontlight, Night mode,
+  Table of contents, Rotate, Full refresh, Dictionary, and File browser.
+- New frontlight dialog with a slider snapped to 10 levels:
+  - **Min** sets the native hardware minimum (`1/255`), below level 1.
+  - **Off/On** turns the light off and restores the last level.
+  - **Max** sets level 10; `−`/`+` move one level.
+  - The side page-turn buttons lower/raise brightness while the dialog is open.
+- **Home acts as Back** in menus and dialogs, one level at a time, in both the reader
+  and the file manager. While backing out, the Quick Menu no longer opens.
+- Setting: **Tools → Cybook: Home button** with a Quick Menu toggle and preview.
+- Plugin-only release: no KOReader rebuild, shim change, kernel, bootloader or NAND
+  modification.
+- Consolidates internal 0.4.0–0.6.0 builds into the first published Home-menu release.
+
 ## v0.3.0 — 2026-11-04
 
 - New **Cybook: performance** menu:

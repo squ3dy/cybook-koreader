@@ -6,11 +6,57 @@ The full release includes a small KOReader plugin:
 koreader/plugins/cybook.koplugin/
 ```
 
-It adds **Tools → Cybook: USB, ADB, stock reader** to KOReader.
+It adds:
 
-The plugin does not talk to the hardware directly. It writes a request to
+- **Tools → Cybook: USB, ADB, stock reader**
+- **Tools → Cybook: performance**
+- **Tools → Cybook: Home button**
+- a reader Home-button **Quick Menu**
+
+The mode-switching part does not talk to the hardware directly. It writes a request to
 `/tmp/cybook-mode` and asks KOReader to exit. The `/mnt/app/boordr` shim reads the request,
 performs the operation, and relaunches KOReader when appropriate.
+
+## Home Quick Menu
+
+While reading, the physical Home button opens a fixed menu:
+
+```
+Frontlight        Night mode
+Table of contents Rotate
+Full refresh      Dictionary
+File browser      (full-width row)
+```
+
+- **Frontlight** opens a slider snapped to levels 1–10. The label shows `N/10`, `Min`
+  or `Off`.
+  - **Min** sets the native hardware minimum (`1/255`), dimmer than level 1.
+  - **Off/On** turns the light off and restores the last level.
+  - **Max** sets level 10.
+  - `−`/`+` and the side page-turn buttons move one level. Left at level 1 goes to
+    Min; right at Min goes to level 1.
+  - Home, Back, Close, or tapping outside closes the slider.
+- **Night mode**, **Rotate**, **Full refresh** and **Dictionary** use the normal
+  KOReader actions.
+- **Table of contents** opens the reader TOC.
+- **File browser** closes the book and opens the file manager.
+
+The Quick Menu is reader-only. File-manager Home behavior is unchanged when no menu is
+open. The toggle and preview are under **Tools → Cybook: Home button**.
+
+## Home as Back
+
+When a menu or dialog is open, Home acts as Back instead of reopening the Quick Menu.
+It backs out one level at a time in both the reader and the file manager:
+
+- settings/TouchMenu: up one level, then close
+- TOC/Menu: up one level, then close
+- input, dictionary, confirmation and spin dialogs: close or cancel
+- Quick Menu and frontlight: close
+- file-manager menus: up one level / close
+
+Screen-saver windows are not dismissed by Home. With no menu open, Home still opens the
+Quick Menu in the reader and goes to the home folder in the file manager.
 
 ## USB mode (mass storage)
 
@@ -93,11 +139,14 @@ The ADB installer copies it automatically.
 
 ## Status
 
-The plugin is ported from the Saraiva Lev project, where the USB mode was tested. On
-`CYBOY5F` it is **not yet tested by this project**. USB mode uses the same stock
-`mass_storage.sh` and the same unmount-first logic, so it should behave the same, but
-verify it with a non-critical book first.
+USB/ADB/stock and the performance menu were introduced in v0.2.0/v0.3.0. The Home Quick
+Menu, frontlight slider and Home-as-Back are new in v0.6.0. Verify them on your unit
+before relying on them.
 
-The performance menu is new and untested on this unit. The menu hides CPU/I/O controls
-the kernel does not expose. Test one change at a time, and keep `performance` governor
-for when you are plugged in until you know the battery cost.
+The frontlight slider uses the stock `/bin/frontlight` interface and assumes the
+`gt80x` touchscreen and page-turn keys of the `CYBOY5F`. Other Bookeen models may map
+keys differently.
+
+The performance menu hides CPU/I/O controls the kernel does not expose. Test one change
+at a time, and keep `performance` governor for when you are plugged in until you know
+the battery cost.

@@ -38,7 +38,11 @@ plugins cost RAM and CPU on this device.
 - Enable **Use left and right keys for page turning** for the side buttons.
 - Keep gestures single-finger; `gt80x` multitouch is not reliable.
 - Set long-press to dictionary lookup and tap-top to menu.
-- Menu/Home button: file browser is a good default.
+- Home button: while reading it opens the Cybook Quick Menu; in menus and dialogs it
+  acts as Back one level at a time. In the file manager with no menu open it goes to
+  the home folder. Configure it under **Tools → Cybook: Home button**.
+- The frontlight dialog uses the side page-turn buttons to lower/raise brightness while
+  it is open.
 
 ## Power
 

@@ -1,14 +1,20 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- Cybook menu: USB mass storage, ADB, stock reader, and performance tuning.
--- The /mnt/app/boordr shim reads /tmp/cybook-mode after KOReader exits.
+-- Cybook plugin: Home-button Quick Menu and Home-as-Back in reader mode,
+-- USB mass storage, ADB, stock reader, and performance tuning. The
+-- /mnt/app/boordr shim reads /tmp/cybook-mode after KOReader exits.
 
+local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
+local Device = require("device")
+local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
+local logger = require("logger")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
+local T = require("ffi/util").template
 
 local CPU_GOV = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
 local CPU_AVAIL = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"
@@ -129,9 +135,428 @@ function Cybook:apply_saved_performance()
     end
 end
 
+local function home_menu_enabled()
+    local v = G_reader_settings:readSetting("cybook_home_quickmenu")
+    return v == nil or v == true
+end
+
+local CybookFrontLightWidget
+
+local function clamp(value, min_value, max_value)
+    if value < min_value then return min_value end
+    if value > max_value then return max_value end
+    return value
+end
+
+local function get_frontlight_widget_class()
+    if CybookFrontLightWidget then return CybookFrontLightWidget end
+
+    local Base = require("ui/widget/frontlightwidget")
+    local FL = Base:extend{}
+
+    function FL:level_to_intensity(level)
+        local span = self.fl.max - self.fl.min
+        return math.floor(self.fl.min + span * level / 10)
+    end
+
+    function FL:intensity_to_level(value)
+        local span = self.fl.max - self.fl.min
+        if span <= 0 or value <= self.fl.min then return 0 end
+        return clamp(math.floor((value - self.fl.min) * 10 / span + 0.5), 1, 10)
+    end
+
+    function FL:refresh_state()
+        self.powerd:updateResumeFrontlightState()
+        self.fl.cur = self.powerd:frontlightIntensity()
+        self:updateBrightnessWidgets()
+        self:update()
+    end
+
+    function FL:set_level(level)
+        level = clamp(level, 1, 10)
+        self.powerd:setIntensity(self:level_to_intensity(level))
+        self:refresh_state()
+    end
+
+    function FL:set_minimum()
+        self.powerd:setIntensity(self.fl.min + 1)
+        self:refresh_state()
+    end
+
+    function FL:toggle_off_on()
+        if self.powerd:isFrontlightOn() then
+            self.powerd:turnOffFrontlight()
+        else
+            if not self.powerd:turnOnFrontlight() then
+                self.powerd:setIntensity(self:level_to_intensity(1))
+            end
+        end
+        self:refresh_state()
+    end
+
+    function FL:change_level(delta)
+        local cur = self.powerd:frontlightIntensity()
+        if cur <= self.fl.min then
+            if delta > 0 then self:set_level(1) end
+            return
+        end
+        if cur <= self.fl.min + 1 then
+            if delta > 0 then self:set_level(1) end
+            return
+        end
+        local level = self:intensity_to_level(cur)
+        if delta < 0 and level <= 1 then
+            self:set_minimum()
+        else
+            self:set_level(level + delta)
+        end
+    end
+
+    function FL:setFrontLightIntensity(intensity)
+        if intensity <= self.fl.min then
+            if self.powerd:isFrontlightOn() then
+                self.powerd:turnOffFrontlight()
+            end
+        else
+            local span = self.fl.max - self.fl.min
+            local level = clamp(math.floor((intensity - self.fl.min) * 10 / span + 0.5), 1, 10)
+            self.powerd:setIntensity(self:level_to_intensity(level))
+        end
+        self.powerd:updateResumeFrontlightState()
+        self.fl.cur = self.powerd:frontlightIntensity()
+    end
+
+    function FL:updateBrightnessWidgets()
+        Base.updateBrightnessWidgets(self)
+        local cur = self.powerd:frontlightIntensity()
+        local label
+        if cur <= self.fl.min then
+            label = _("Off")
+        elseif cur <= self.fl.min + 1 then
+            label = _("Min")
+        else
+            label = T(_("%1/10"), self:intensity_to_level(cur))
+        end
+        self.fl_level:setText(label)
+        if cur <= self.fl.min + 1 then
+            self.fl_minus:disable()
+        else
+            self.fl_minus:enable()
+        end
+        local toggle = self.layout[2] and self.layout[2][2]
+        if toggle then
+            toggle:setText(cur > self.fl.min and _("Off") or _("On"), toggle.width)
+        end
+    end
+
+    function FL:setup_cybook_controls()
+        -- FocusManager drops the default Home binding on devices without a D-pad.
+        self.key_events.Home = { { "Home" } }
+        self.key_events.BrightnessDown = { { Device.input.group.PgBack } }
+        self.key_events.BrightnessUp = { { Device.input.group.PgFwd } }
+
+        local span = self.fl.max - self.fl.min
+        local ticks = {}
+        for i = 1, 9 do
+            ticks[i] = math.floor(self.fl.min + span * i / 10)
+        end
+        self.fl_progress.ticks = ticks
+
+        local fl_buttons = self.layout[1]
+        if fl_buttons then
+            fl_buttons[1].callback = function() self:change_level(-1) end
+            fl_buttons[2].callback = function() self:change_level(1) end
+        end
+        local extrema = self.layout[2]
+        if extrema then
+            extrema[1].callback = function() self:set_minimum() end
+            extrema[2].callback = function() self:toggle_off_on() end
+            extrema[3].callback = function() self:set_level(10) end
+        end
+
+        self:updateBrightnessWidgets()
+    end
+
+    function FL:init()
+        Base.init(self)
+        self:setup_cybook_controls()
+    end
+
+    function FL:onHome()
+        self:onClose()
+        return true
+    end
+
+    function FL:onBrightnessDown()
+        self:change_level(-1)
+        return true
+    end
+
+    function FL:onBrightnessUp()
+        self:change_level(1)
+        return true
+    end
+
+    function FL:onClose()
+        if self.cybook_on_close then
+            self.cybook_on_close()
+        end
+        return Base.onClose(self)
+    end
+
+    CybookFrontLightWidget = FL
+    return FL
+end
+
+function Cybook:close_home_menu()
+    local qm = self.home_menu
+    self.home_menu = nil
+    if qm and UIManager:isWidgetShown(qm) then
+        UIManager:close(qm)
+    end
+end
+
+function Cybook:close_brightness_menu()
+    local bm = self.brightness_menu
+    self.brightness_menu = nil
+    if bm and UIManager:isWidgetShown(bm) then
+        UIManager:close(bm)
+    end
+end
+
+function Cybook:run_action(key)
+    self:close_home_menu()
+    self:close_brightness_menu()
+    local ok, err = pcall(function()
+        Dispatcher:init()
+        Dispatcher:execute({ [key] = true })
+    end)
+    if not ok then
+        logger.warn("cybook: quick menu action failed", key, err)
+    end
+end
+
+function Cybook:show_brightness_menu()
+    self:close_home_menu()
+    self:close_brightness_menu()
+
+    local FL = get_frontlight_widget_class()
+    local widget = FL:new{
+        cybook_on_close = function()
+            self.brightness_menu = nil
+        end,
+    }
+    self.brightness_menu = widget
+    UIManager:show(widget)
+end
+
+function Cybook:show_home_quickmenu(readerui)
+    self:close_home_menu()
+    self:close_brightness_menu()
+    local buttons = {
+        {
+            {
+                text = _("Frontlight"),
+                callback = function()
+                    self:show_brightness_menu()
+                end,
+            },
+            {
+                text = _("Night mode"),
+                callback = function() self:run_action("night_mode") end,
+            },
+        },
+        {
+            {
+                text = _("Table of contents"),
+                callback = function() self:run_action("toc") end,
+            },
+            {
+                text = _("Rotate"),
+                callback = function() self:run_action("toggle_rotation") end,
+            },
+        },
+        {
+            {
+                text = _("Full refresh"),
+                callback = function() self:run_action("full_refresh") end,
+            },
+            {
+                text = _("Dictionary"),
+                callback = function() self:run_action("dictionary_lookup") end,
+            },
+        },
+        {
+            {
+                text = _("File browser"),
+                callback = function()
+                    self:close_home_menu()
+                    local ReaderUI = require("apps/reader/readerui")
+                    local orig = ReaderUI._cybook_original_on_home
+                    if orig and readerui then
+                        orig(readerui)
+                    else
+                        UIManager:show(InfoMessage:new{ text = _("File browser is unavailable.") })
+                    end
+                end,
+            },
+        },
+    }
+
+    local qm
+    qm = ButtonDialog:new{
+        title = _("Quick Menu"),
+        buttons = buttons,
+        width_factor = 0.85,
+        shrink_unneeded_width = true,
+        use_info_style = false,
+        tap_close_callback = function() self.home_menu = nil end,
+    }
+    -- FocusManager drops the default Home binding on devices without a D-pad.
+    qm.key_events.Home = { { "Home" } }
+    qm.onHome = function()
+        self.home_menu = nil
+        UIManager:close(qm)
+        return true
+    end
+    self.home_menu = qm
+    UIManager:show(qm)
+end
+
+function Cybook:on_home(readerui)
+    if not home_menu_enabled() then return false end
+    if not readerui or not readerui.document or readerui.tearing_down then return false end
+    if self.home_menu and UIManager:isWidgetShown(self.home_menu) then
+        self:close_home_menu()
+        return true
+    end
+    if self.brightness_menu and UIManager:isWidgetShown(self.brightness_menu) then
+        self:close_brightness_menu()
+        return true
+    end
+    self:show_home_quickmenu(readerui)
+    return true
+end
+
+local BACK_METHODS = {
+    "onCloseDialog",
+    "onCloseWithKey",
+    "onCloseWithKeys",
+    "onBack",
+    "onClose",
+    "onAnyKeyPressed",
+}
+
+local function find_back_target(widget, depth)
+    if not widget or type(widget) ~= "table" or depth > 5 then return nil end
+    for _, method in ipairs(BACK_METHODS) do
+        if type(widget[method]) == "function" then return widget end
+    end
+    for i = 1, #widget do
+        local found = find_back_target(widget[i], depth + 1)
+        if found then return found end
+    end
+    return nil
+end
+
+local function get_back_window()
+    if not UIManager.getTopmostVisibleWidget then return nil end
+    local top = UIManager:getTopmostVisibleWidget()
+    if not top or not top.toast then return top end
+    if UIManager._window_stack then
+        for i = #UIManager._window_stack, 1, -1 do
+            local widget = UIManager._window_stack[i].widget
+            if not widget.invisible and not widget.toast then
+                return widget
+            end
+        end
+    end
+    return nil
+end
+
+function Cybook:back_out_widget(top)
+    local target = find_back_target(top, 0) or top
+    if target.name == "ScreenSaver" or target.name == "ScreenSaverLock" then
+        return false
+    end
+
+    for _, method in ipairs(BACK_METHODS) do
+        if type(target[method]) == "function" then
+            local ok, err = pcall(target[method], target)
+            if ok then return true end
+            logger.warn("cybook: Home back failed", method, err)
+        end
+    end
+
+    local ok, err = pcall(UIManager.close, UIManager, top)
+    if not ok then
+        logger.warn("cybook: Home close failed", err)
+    end
+    return true
+end
+
+function Cybook:handle_home_key()
+    local top = get_back_window()
+    if not top or top == self.ui then return false end
+    return self:back_out_widget(top)
+end
+
+function Cybook:install_home_back_hook()
+    if UIManager._cybook_home_back_hooked then return end
+    if not UIManager.handleInputEvent then return end
+    UIManager._cybook_home_back_hooked = true
+    local original_handle_input = UIManager.handleInputEvent
+    function UIManager:handleInputEvent(input_event)
+        if input_event and input_event.handler == "onKeyPress"
+                and input_event.args and input_event.args[1] then
+            local key = input_event.args[1]
+            if type(key) == "table" and key.key == "Home" then
+                -- Use the require cache to avoid loading the file manager from
+                -- inside its own plugin init.
+                local ReaderUI = package.loaded["apps/reader/readerui"]
+                local ui = ReaderUI and ReaderUI.instance
+                if not ui or ui.tearing_down then
+                    local FileManager = package.loaded["apps/filemanager/filemanager"]
+                    ui = FileManager and FileManager.instance
+                end
+                local plugin = ui and ui.cybook_plugin
+                if plugin then
+                    local ok, handled = pcall(plugin.handle_home_key, plugin)
+                    if ok and handled then return end
+                    if not ok then
+                        logger.warn("cybook: Home back hook failed", handled)
+                    end
+                end
+            end
+        end
+        return original_handle_input(self, input_event)
+    end
+end
+
+function Cybook:install_home_hook()
+    local ReaderUI = require("apps/reader/readerui")
+    if ReaderUI._cybook_home_hooked then return end
+    ReaderUI._cybook_original_on_home = ReaderUI.onHome
+    ReaderUI._cybook_home_hooked = true
+    function ReaderUI:onHome()
+        local plugin = self.cybook_plugin
+        if plugin then
+            local ok, handled = pcall(plugin.on_home, plugin, self)
+            if ok and handled then return true end
+            if not ok then
+                logger.warn("cybook: Home Quick Menu failed", handled)
+            end
+        end
+        return ReaderUI._cybook_original_on_home(self)
+    end
+end
+
 function Cybook:init()
+    self.ui.cybook_plugin = self
     self.ui.menu:registerToMainMenu(self)
     self:apply_saved_performance()
+    self:install_home_hook()
+    self:install_home_back_hook()
 end
 
 local function request(mode, warning)
@@ -329,6 +754,32 @@ function Cybook:add_performance_menu(menu_items)
     }
 end
 
+function Cybook:add_home_menu(menu_items)
+    menu_items.cybook_home = {
+        text = _("Cybook: Home button"),
+        sorting_hint = "more_tools",
+        sub_item_table = {
+            {
+                text = _("Home opens Quick Menu"),
+                checked_func = home_menu_enabled,
+                callback = function()
+                    G_reader_settings:saveSetting("cybook_home_quickmenu", not home_menu_enabled())
+                end,
+            },
+            {
+                text = _("Preview Quick Menu"),
+                callback = function()
+                    if self.ui.document then
+                        self:show_home_quickmenu(self.ui)
+                    else
+                        UIManager:show(InfoMessage:new{ text = _("Open a book first.") })
+                    end
+                end,
+            },
+        },
+    }
+end
+
 function Cybook:addToMainMenu(menu_items)
     menu_items.cybook = {
         text = _("Cybook: USB, ADB, stock reader"),
@@ -355,6 +806,7 @@ function Cybook:addToMainMenu(menu_items)
         },
     }
     self:add_performance_menu(menu_items)
+    self:add_home_menu(menu_items)
 end
 
 return Cybook
